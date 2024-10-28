@@ -1,3 +1,5 @@
+import os
+
 import torch
 from torch.utils.data import DataLoader
 from transformers import pipeline
@@ -5,19 +7,16 @@ from utils import *
 
 
 
-root_dir = "/home/julian/PycharmProjects/pythonProject/datos/Kale/caso3/test"
+root_dir = "/home/julian/PycharmProjects/pythonProject/datos/Kale/data/test"
 
 # Check if a GPU is available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 audio_classifier = pipeline(task="zero-shot-audio-classification", model="davidrrobinson/BioLingual",device=device)
 #audio_classifier = pipeline(task="zero-shot-audio-classification", model="laion/larger_clap_general",device=device)
-# List of species (classnames)
-species = ["Leptodactylus_fragilis", "Alouatta_sp", "Dendropsophus_microcephalus", "Leptodactylus_fuscus","Patagioenas_cayennensis","Nyctidromus_albicollis","Crypturellus_soui"]
-species2 = ["Leptodactylus_fragilis", "Alouatta_sp", "Dendropsophus_microcephalus", "Leptodactylus_fuscus"]
-
 # Generate captions for each species
 # templ,index = templates(pd.read_csv(csv_path),species)
-templ, index = templates3(species2)
+species=os.listdir(root_dir)
+templ, index = templates3(species)
 # templ,index,taxonomy = templates4(pd.read_csv(csv_path),species)
 
 # Create the dataset

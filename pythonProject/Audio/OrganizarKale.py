@@ -11,6 +11,8 @@ def cut_segment(path_aud,t1,t2,output_path):
     # Cortar el audio (en milisegundos)
     t1 = t1*1000
     t2 = t2*1000
+    if t2-t1<1000:
+        t2=t1+1000
     newAudio = sound[t1:t2]
 
     # Exportar el nuevo audio
@@ -30,29 +32,37 @@ sites_test=['KLSA03','KLSA05','KLSA07','KLSA10','KLSA12','KLSA13']
 
 path='/home/julian/PycharmProjects/pythonProject/datos/Kale/All sounds'
 df=pd.read_excel('/home/julian/PycharmProjects/pythonProject/datos/Kale/1_filtered_allFeaturesandLabels.xlsx')
-new_path='/home/julian/PycharmProjects/pythonProject/datos/Kale/Sites'
+df_seg_malos=pd.read_excel('/home/julian/PycharmProjects/pythonProject/datos/Kale/posibles_segmentos_malos.xlsx')
+new_path='/home/julian/PycharmProjects/pythonProject/datos/Kale/data'
 os.makedirs(new_path,exist_ok=True)
+
+#lista de seg malos
+seg_malos = df_seg_malos['Lonely Index'].tolist()
+
+
 
 for _,row in df.iterrows():
     site = point[row['File'].split('_')[0]]
     t1= row['Start']
     t2 = row['End']
     ok=False
-    if site in sites_train_val:
-        # Split into train and val based on a random 80/20 split
-        if random.random() < 0.8:
-            folder='train'
-        else:
-            folder='val'
-        ok=True
-    elif site in sites_test:
-        folder='test'
-        ok=True
-    if ok:
-        os.makedirs(os.path.join(new_path, folder,row['Specie ID']), exist_ok=True)
-        out=os.path.join(new_path,folder,row['Specie ID'],str(row['id'])+'_'+row['File'])
-        aud_name=os.path.join(path,row['File'])
-        cut_segment(aud_name, t1, t2, out)
+    if not(row['id'] in seg_malos):# mirar que este fuera de la lista de posibles fallas
+
+        if site in sites_train_val:
+            # Split into train and val based on a random 80/20 split
+            if random.random() < 0.8:
+                folder='train'
+            else:
+                folder='val'
+            ok=True
+        elif site in sites_test:
+            folder='test'
+            ok=True
+        if ok:
+            os.makedirs(os.path.join(new_path, folder,row['Specie ID']), exist_ok=True)
+            out=os.path.join(new_path,folder,row['Specie ID'],str(row['id'])+'_'+row['File'])
+            aud_name=os.path.join(path,row['File'])
+            cut_segment(aud_name, t1, t2, out)
 
 
 
