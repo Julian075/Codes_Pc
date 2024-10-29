@@ -5,6 +5,7 @@ import soundfile as sf
 import os
 import numpy as np
 from sklearn.metrics import classification_report, confusion_matrix
+import pandas as pd
 
 ## Create a mapping for captions based on the folder (species) name
 def create_caption_from_species(species_name, mean_f_peak, mean_f_min, mean_f_max):
@@ -27,7 +28,8 @@ def templates2(class_names):
     target_index={}
     cont=0
     for class_name in class_names:
-        templ.append( f"A sound of {class_name}")
+        caption=f"A sound of {class_name}"
+        templ.append( caption)
         target_index[class_name]=cont
         cont=cont+1
     return templ,target_index
@@ -115,7 +117,7 @@ def predict(dataloader,audio_classifier,templ,indx):
     y_true = []
     y_pred = []
 
-    confusion_matrix = np.zeros((len(indx), len(indx)))# Create a zero-filled matrix
+    confusion_matrix = np.zeros((len(templ), len(templ)))# Create a zero-filled matrix
     for audio, target in dataloader:
         audio_array = []
         for i in range(len(audio)):
@@ -132,14 +134,14 @@ def predict(dataloader,audio_classifier,templ,indx):
             target_label = templ[target[i].item()]  # Convert the target index to the expected label
 
             # Update confusion matrix
-            confusion_matrix[indx[target_label]][indx[predicted_label]] += 1
+            confusion_matrix[templ.index(target_label)][templ.index(predicted_label)] += 1
 
             # Append to y_true and y_pred
             y_true.append(target_label)
             y_pred.append(predicted_label)
 
             # Compare the predicted label with the true target label
-            if indx[predicted_label] == indx[target_label]:
+            if templ.index(predicted_label) == templ.index(target_label):
                 correct_predictions += 1
             total_predictions += 1
     # Calculate accuracy
@@ -149,3 +151,14 @@ def predict(dataloader,audio_classifier,templ,indx):
     print(confusion_matrix)
     report = classification_report(y_true, y_pred)
     print(report)
+
+    # Create DataFrames for each component
+    cm_df = pd.DataFrame(confusion_matrix, index=indx.keys(), columns=indx.keys())
+    report_df = pd.DataFrame.from_dict(classification_report(y_true, y_pred, output_dict=True)).transpose()
+
+    # Combine DataFrames into a single DataFrame
+    combined_df = pd.concat([ cm_df, report_df], axis=1)
+
+    # Save to Excel
+    combined_df.to_excel('classification_report.xlsx', index=False)
+
