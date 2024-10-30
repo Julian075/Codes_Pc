@@ -19,12 +19,10 @@ audio_classifier = pipeline(task="zero-shot-audio-classification", model="davidr
 # templ,index = templates(pd.read_csv(csv_path),species)
 species=os.listdir(root_dir)
 df_fre_info=pd.read_csv(path_info)
-templ, index = templates(df_fre_info,species)
-#templ, index = templates(species)
-# templ,index,taxonomy = templates4(pd.read_csv(csv_path),species)
+#templ, index = templates(df_fre_info,species)
+templ, index = templates3(species)
 
 # Create the dataset
-# dataset = AudioCaptionDatasetFromFolder(root_dir=root_dir, target_index=index,max_length=10, mode=1,taxonomy=taxonomy)
 dataset = AudioCaptionDatasetFromFolder(root_dir=root_dir, target_index=index, max_length=10, mode=0)
 
 # Create a DataLoader

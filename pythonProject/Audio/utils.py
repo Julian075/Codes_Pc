@@ -7,6 +7,7 @@ import numpy as np
 from sklearn.metrics import classification_report, confusion_matrix
 import pandas as pd
 
+
 ## Create a mapping for captions based on the folder (species) name
 def create_caption_from_species(species_name, mean_f_peak, mean_f_min, mean_f_max):
     return f"Species: {species_name}, Peak Frequency: {mean_f_peak}, Min Frequency: {mean_f_min}, Max Frequency: {mean_f_max}"
