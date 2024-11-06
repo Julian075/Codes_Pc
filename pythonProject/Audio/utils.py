@@ -1,16 +1,19 @@
 
 from transformers import ClapProcessor
 from torch.utils.data import Dataset
+import torch.nn.functional as F
 import soundfile as sf
 import os
 import numpy as np
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+from tqdm import tqdm
+import torch
 import pandas as pd
 
 
 ## Create a mapping for captions based on the folder (species) name
 def create_caption_from_species(species_name, mean_f_peak, mean_f_min, mean_f_max):
-    return f"Species: {species_name}, Peak Frequency: {mean_f_peak}, Min Frequency: {mean_f_min}, Max Frequency: {mean_f_max}"
+    return f"Species: {species_name}, Peak Frequency: {mean_f_peak} khz, Min Frequency: {mean_f_min} khz, Max Frequency: {mean_f_max} khz"
 
 def templates(df,list_sp):
     templ = []
@@ -45,24 +48,10 @@ def templates3(class_names):
         cont=cont+1
     return templ,target_index
 
-def templates4(df,list_sp):
-    templ = []
-    target_index={}
-    taxonomy={}
-    cont=0
-    for index, row in df.iterrows():
-        if row['species'] in list_sp:
-            if not( row['taxonomy'] in target_index):
-                templ.append( f"A sound of {row['taxonomy']}")
-                target_index[row['taxonomy']]=cont
-                cont=cont+1
-            if  not( row['species'] in taxonomy):
-                taxonomy[row['species']]=row['taxonomy']
 
-    return templ,target_index,taxonomy
 
 class AudioCaptionDatasetFromFolder(Dataset):
-    def __init__(self, root_dir, target_index=None, max_length=None, mode=None,taxonomy=None):
+    def __init__(self, root_dir, target_index=None, max_length=None,model=''):
         """
         Args:
             root_dir (string): Directory with subfolders for each species, containing audio files.
@@ -74,7 +63,8 @@ class AudioCaptionDatasetFromFolder(Dataset):
         self.targets = []
         self.index = target_index if target_index else {}
         self.max_length=max_length
-        self.taxonomy=taxonomy
+        self.num_classes=len(target_index)
+        self.model=model
 
         # Traverse the folder structure and collect file paths and species names
         for species_folder in os.listdir(root_dir):
@@ -83,10 +73,7 @@ class AudioCaptionDatasetFromFolder(Dataset):
                 for file_name in os.listdir(species_path):
                     if file_name.endswith(".wav"):  # Assuming audio files are in .wav format
                         self.audio_files.append(os.path.join(species_path, file_name))
-                        if mode == 0:
-                            self.targets.append(self.index[species_folder])
-                        elif mode == 1:
-                            self.targets.append(self.index[self.taxonomy[species_folder]])
+                        self.targets.append(self.index[species_folder])
 
     def __len__(self):
         return len(self.audio_files)
@@ -95,31 +82,59 @@ class AudioCaptionDatasetFromFolder(Dataset):
         audio_path = self.audio_files[idx]
         target = self.targets[idx]
 
-        # Load the audio file
-        audio, sample_rate = sf.read(audio_path)
-        # Convert max_length from seconds to samples
-        max_length_in_samples = int(self.max_length * sample_rate)
+        # Crear la codificación one-hot para el target
+        one_hot_target = np.zeros(self.num_classes)
+        one_hot_target[target] = 1
+        if self.model == 'biolingual':
+            # Load the audio file
+            audio, sample_rate = sf.read(audio_path)
+            # Convert max_length from seconds to samples
+            max_length_in_samples = int(self.max_length * sample_rate)
 
-        # Pad or truncate the audio to the desired max_length in samples
-        if len(audio) > max_length_in_samples:
-            audio = audio[:max_length_in_samples]  # Truncate if too long
-        elif len(audio) < max_length_in_samples:
-            # Pad if too short
-            padding = np.zeros(max_length_in_samples - len(audio))
-            audio = np.concatenate((audio, padding))
+            # Pad or truncate the audio to the desired max_length in samples
+            if len(audio) > max_length_in_samples:
+                audio = audio[:max_length_in_samples]  # Truncate if too long
+            elif len(audio) < max_length_in_samples:
+                # Pad if too short
+                padding = np.zeros(max_length_in_samples - len(audio))
+                audio = np.concatenate((audio, padding))
+            return audio, target ,one_hot_target
+        elif self.model=='clap':
+            return audio_path, target, one_hot_target
 
-        return audio, target
+def biolingual_features_audio(audio_path,model,processor,max_length,device):
+    # Load the audio file
+    audio_sample, sample_rate = sf.read(audio_path)
+    # Convert max_length from seconds to samples
+    max_length_in_samples = int(max_length * sample_rate)
 
+    # Pad or truncate the audio to the desired max_length in samples
+    if len(audio_sample) > max_length_in_samples:
+        audio_sample = audio_sample[:max_length_in_samples]  # Truncate if too long
+    elif len(audio_sample) < max_length_in_samples:
+        # Pad if too short
+        padding = np.zeros(max_length_in_samples - len(audio_sample))
+        audio_sample = np.concatenate((audio_sample, padding))
 
-def predict(dataloader,audio_classifier,templ,indx):
+    with torch.no_grad():
+        inputs = processor(audios=audio_sample,sample_rate=sample_rate, return_tensors="pt").to(device)
+        audio_embed = model.get_audio_features(**inputs)
+    return audio_embed
+
+def biolingual_features_text(prompt,model,processor,device):
+    with torch.no_grad():
+        text_inputs = processor(text=prompt, return_tensors="pt").to(device)
+        text_embed = model.get_text_features(**text_inputs)
+    return text_embed
+
+def biolingual_predict(dataloader,audio_classifier,templ):
     correct_predictions = 0
     total_predictions = 0
 
     y_true = []
     y_pred = []
 
-    confusion_matrix = np.zeros((len(templ), len(templ)))# Create a zero-filled matrix
-    for audio, target in dataloader:
+    for audio, target, one_hot_target in dataloader:
         audio_array = []
         for i in range(len(audio)):
             audio_array.append(audio[i].numpy())  # Convert the audio sample to a NumPy array
@@ -131,35 +146,115 @@ def predict(dataloader,audio_classifier,templ,indx):
             # Get the predicted label with the highest score
             predicted_label = max(output[i], key=lambda x: x['score'])['label']
 
-            # Get the ground truth target label
-            target_label = templ[target[i].item()]  # Convert the target index to the expected label
-
-            # Update confusion matrix
-            confusion_matrix[templ.index(target_label)][templ.index(predicted_label)] += 1
-
             # Append to y_true and y_pred
-            y_true.append(target_label)
-            y_pred.append(predicted_label)
+            one_hot_pred = np.zeros(len(one_hot_target[0]))
+            one_hot_pred[templ.index(predicted_label)] = 1
+            y_pred.append(one_hot_pred)
+            y_true.append(one_hot_target[i].detach().cpu().numpy())
 
-            # Compare the predicted label with the true target label
-            if templ.index(predicted_label) == templ.index(target_label):
-                correct_predictions += 1
-            total_predictions += 1
-    # Calculate accuracy
-    accuracy = correct_predictions / total_predictions
-    print(f"Accuracy: {accuracy * 100:.2f}%")
+    # Convert one-hot encoded `y_true` and `y_pred` to class indices
+    y_true = np.argmax(y_true, axis=1)
+    y_pred = np.argmax(y_pred, axis=1)
+    acc = accuracy_score(y_true, y_pred)
+    print(f'Accuracy: {acc * 100:.2f}%')
+    # Calculate confusion matrix
+    conf_matrix = confusion_matrix(y_true, y_pred)
     print("Confusion Matrix:")
-    print(confusion_matrix)
-    report = classification_report(y_true, y_pred)
-    print(report)
+    print(conf_matrix)
 
-    # Create DataFrames for each component
-    cm_df = pd.DataFrame(confusion_matrix, index=indx.keys(), columns=indx.keys())
-    report_df = pd.DataFrame.from_dict(classification_report(y_true, y_pred, output_dict=True)).transpose()
+    # Calculate F1-score and other metrics
+    report = classification_report(y_true, y_pred, target_names=templ, output_dict=True)
+    report_df = pd.DataFrame(report).transpose()
+    print("Classification Report:")
+    print(report_df)
 
-    # Combine DataFrames into a single DataFrame
-    combined_df = pd.concat([ cm_df, report_df], axis=1)
+    # Create a DataFrame for the confusion matrix
+    cm_df = pd.DataFrame(conf_matrix, index=templ, columns=templ)
 
-    # Save to Excel
-    combined_df.to_excel('classification_report.xlsx', index=False)
+    # Save both confusion matrix and classification report to a CSV file
+    combined_df = pd.concat([cm_df, report_df], axis=1)
+    combined_df.to_csv('classification_report.csv', index=True)
 
+def CLAP_predict(dataloader,clap_model,templ):
+    # Computing text embeddings
+    text_embeddings = clap_model.get_text_embeddings(templ)
+    # Computing audio embeddings
+    y_preds, y_labels = [], []
+    for x, _, one_hot_target in dataloader:
+        audio_embeddings = clap_model.get_audio_embeddings(x, resample=True)
+        similarity = clap_model.compute_similarity(audio_embeddings, text_embeddings)
+        y_pred = F.softmax(similarity.detach().cpu(), dim=1).numpy()
+        y_preds.append(y_pred)
+        y_labels.append(one_hot_target.detach().cpu().numpy())
+
+    y_labels, y_preds = np.concatenate(y_labels, axis=0), np.concatenate(y_preds, axis=0)
+    # Convert one-hot encoded `y_labels` and probability-based `y_preds` to class indices
+    y_true = np.argmax(y_labels, axis=1)
+    y_pred_classes = np.argmax(y_preds, axis=1)
+    # Calculate accuracy
+    acc = accuracy_score(y_true, y_pred_classes)
+    print(f'Accuracy: {acc * 100:.2f}%')
+
+    # Calculate confusion matrix
+    conf_matrix = confusion_matrix(y_true, y_pred_classes)
+    print("Confusion Matrix:")
+    print(conf_matrix)
+
+    # Calculate F1-score and other metrics
+    report = classification_report(y_true, y_pred_classes, target_names=templ, output_dict=True)
+    report_df = pd.DataFrame(report).transpose()
+    print("Classification Report:")
+    print(report_df)
+
+    # Create a DataFrame for the confusion matrix
+    cm_df = pd.DataFrame(conf_matrix, index=templ, columns=templ)
+
+    # Save both confusion matrix and classification report to a CSV file
+    combined_df = pd.concat([cm_df, report_df], axis=1)
+    combined_df.to_csv('classification_report.csv', index=True)
+
+
+def train_CLAP(dataloader, clap_model, templ, optimizer, num_epochs=10):
+    # Set model to training mode
+    clap_model.train()
+
+    # Compute text embeddings for labels once
+    text_embeddings = clap_model.get_text_embeddings(templ)
+
+    for epoch in range(num_epochs):
+        running_loss = 0.0
+        y_true, y_pred_classes = [], []
+
+        # Iterate through batches in the dataloader
+        for x, _, one_hot_target in tqdm(dataloader, desc=f"Epoch {epoch + 1}/{num_epochs}"):
+            optimizer.zero_grad()  # Reset gradients
+
+            # Compute audio embeddings
+            audio_embeddings = clap_model.get_audio_embeddings(x, resample=True)
+
+            # Compute similarity between audio and text embeddings
+            similarity = clap_model.compute_similarity(audio_embeddings, text_embeddings)
+
+            # Compute loss
+            y_true_batch = torch.argmax(one_hot_target, dim=1).to(similarity.device)  # Convert one-hot to class indices
+            loss = F.cross_entropy(similarity, y_true_batch)
+
+            # Backpropagation and optimization
+            loss.backward()
+            optimizer.step()
+
+            # Track loss
+            running_loss += loss.item()
+
+            # Store true and predicted labels for accuracy calculation
+            y_true.extend(y_true_batch.cpu().numpy())
+            y_pred_classes.extend(torch.argmax(similarity, dim=1).cpu().numpy())
+
+        # Calculate average loss for the epoch
+        avg_loss = running_loss / len(dataloader)
+        # Calculate accuracy for the epoch
+        epoch_acc = accuracy_score(y_true, y_pred_classes)
+
+        print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {avg_loss:.4f} - Accuracy: {epoch_acc * 100:.2f}%")
+
+    print("Training Complete")
